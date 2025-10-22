@@ -1,0 +1,25 @@
+# Dockerfile for DSS Service Development
+# Supports live code reloading by mounting source code as volumes
+
+FROM clojure:temurin-21-tools-deps-alpine
+
+# Install curl for healthcheck
+RUN apk add --no-cache curl
+
+WORKDIR /app
+
+# Copy dependency files
+COPY deps.edn /app/
+
+# Download dependencies (this layer will be cached)
+RUN clj -P
+
+# Copy source code (will be overridden by volume mount in docker-compose)
+COPY src /app/src
+
+# Expose port
+EXPOSE 4000
+
+# Start the service
+# Note: In development, source code is mounted as volume for live reloading
+CMD ["clj", "-M:run"]

@@ -1,0 +1,22 @@
+# Clojure
+.cpcache/
+.calva/
+.nrepl-port
+target/
+
+# Certificates (DO NOT COMMIT)
+*.p12
+*.pfx
+*.jks
+
+# Test files
+*.pdf
+*.sh
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store

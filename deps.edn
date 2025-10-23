@@ -3,6 +3,7 @@
  :deps {org.clojure/clojure {:mvn/version "1.11.3"}
         http-kit/http-kit   {:mvn/version "2.8.0"}
         metosin/reitit-ring {:mvn/version "0.7.2"}
+        ring/ring-core      {:mvn/version "1.12.1"}
 
         ;; EU DSS Framework dependencies
         eu.europa.ec.joinup.sd-dss/dss-pades {:mvn/version "6.3"}

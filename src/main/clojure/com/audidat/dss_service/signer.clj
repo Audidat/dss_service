@@ -10,9 +10,13 @@
            (eu.europa.esig.dss.service.tsp OnlineTSPSource)
            (eu.europa.esig.dss.spi.validation CommonCertificateVerifier)
            (eu.europa.esig.dss.spi.x509 CommonCertificateSource CommonTrustedCertificateSource)
-           (eu.europa.esig.dss.token Pkcs12SignatureToken)
-           (java.io File FileOutputStream ByteArrayOutputStream)
-           (java.security KeyStore$PasswordProtection)))
+           (eu.europa.esig.dss.token Pkcs12SignatureToken KSPrivateKeyEntry)
+           (eu.europa.esig.dss.model.x509 CertificateToken)
+           (java.io File FileOutputStream ByteArrayOutputStream ByteArrayInputStream)
+           (java.security KeyStore$PasswordProtection)
+           (java.security.cert CertificateFactory)
+           (java.security KeyFactory)
+           (java.security.spec PKCS8EncodedKeySpec)))
 
 
 (defn create-crl-source
@@ -276,6 +280,183 @@
                      (.setContentSize 65536)) ; 64KB for LTA with archive timestamp
 
         ;; Extend directly to LTA level (DSS will add only archive timestamp)
+        lta-document (.extendDocument service signed-document lta-params)
+
+        ;; Convert to byte array
+        output-stream (ByteArrayOutputStream.)]
+
+    (try
+      (.writeTo lta-document output-stream)
+      (.toByteArray output-stream)
+      (finally
+        (.close output-stream)))))
+
+;; ============================================================================
+;; PEM-based signing functions (for database-driven certificates)
+;; ============================================================================
+
+(defn parse-pem-certificate
+  "Parses a PEM-formatted certificate string into an X509Certificate."
+  [pem-string]
+  (let [cert-factory (CertificateFactory/getInstance "X.509")
+        ;; Remove PEM headers and decode Base64
+        clean-pem (-> pem-string
+                      (.replaceAll "-----BEGIN CERTIFICATE-----" "")
+                      (.replaceAll "-----END CERTIFICATE-----" "")
+                      (.replaceAll "\\s" ""))
+        cert-bytes (.decode (java.util.Base64/getDecoder) clean-pem)
+        input-stream (ByteArrayInputStream. cert-bytes)]
+    (.generateCertificate cert-factory input-stream)))
+
+(defn parse-pem-private-key
+  "Parses a PEM-formatted private key string into a PrivateKey."
+  [pem-string]
+  (let [;; Remove PEM headers and decode Base64
+        clean-pem (-> pem-string
+                      (.replaceAll "-----BEGIN PRIVATE KEY-----" "")
+                      (.replaceAll "-----END PRIVATE KEY-----" "")
+                      (.replaceAll "-----BEGIN RSA PRIVATE KEY-----" "")
+                      (.replaceAll "-----END RSA PRIVATE KEY-----" "")
+                      (.replaceAll "\\s" ""))
+        key-bytes (.decode (java.util.Base64/getDecoder) clean-pem)
+        key-spec (PKCS8EncodedKeySpec. key-bytes)
+        key-factory (KeyFactory/getInstance "RSA")]
+    (.generatePrivate key-factory key-spec)))
+
+(defn create-token-from-pem
+  "Creates a KeyStoreSignatureTokenConnection from PEM certificate and private key strings using in-memory KeyStore."
+  [cert-pem key-pem]
+  (let [x509-cert (parse-pem-certificate cert-pem)
+        private-key (parse-pem-private-key key-pem)
+        ;; Create an in-memory KeyStore
+        keystore (java.security.KeyStore/getInstance "PKCS12")
+        password (.toCharArray "temp")]
+    ;; Initialize empty keystore
+    (.load keystore nil password)
+    ;; Add the private key and certificate chain
+    (.setKeyEntry keystore "certificate" private-key password
+                  (into-array java.security.cert.Certificate [x509-cert]))
+
+    ;; Serialize keystore to bytes
+    (let [baos (ByteArrayOutputStream.)]
+      (.store keystore baos password)
+      (let [keystore-bytes (.toByteArray baos)
+            bais (ByteArrayInputStream. keystore-bytes)]
+        ;; Create KeyStoreSignatureTokenConnection with InputStream
+        (eu.europa.esig.dss.token.KeyStoreSignatureTokenConnection.
+         bais
+         "PKCS12"
+         (KeyStore$PasswordProtection. password))))))
+
+(defn sign-pdf-with-pem
+  "Signs a PDF from byte array using PEM certificate and key, returns signed PDF as byte array.
+
+   Options map contains:
+   - :pdf-bytes - PDF content as byte array (required)
+   - :certificate-pem - PEM-formatted certificate (required)
+   - :private-key-pem - PEM-formatted private key (required)
+   - :tsa-url - Timestamp authority URL (default: http://timestamp.digicert.com)"
+  [& {:keys [pdf-bytes certificate-pem private-key-pem tsa-url]
+      :or {tsa-url "http://timestamp.digicert.com"}}]
+
+  (when-not pdf-bytes
+    (throw (IllegalArgumentException. "pdf-bytes is required")))
+  (when-not certificate-pem
+    (throw (IllegalArgumentException. "certificate-pem is required")))
+  (when-not private-key-pem
+    (throw (IllegalArgumentException. "private-key-pem is required")))
+
+  ;; Create token from PEM
+  (let [token (create-token-from-pem certificate-pem private-key-pem)
+        private-key-entry (first (.getKeys token))
+        cert-chain (.getCertificateChain private-key-entry)
+
+        ;; Load document from bytes
+        document-to-sign (InMemoryDocument. pdf-bytes)
+
+        ;; Setup revocation sources
+        crl-source (create-crl-source)
+        ocsp-source (create-ocsp-source)
+
+        ;; Setup certificate sources
+        cert-sources (setup-certificate-sources cert-chain)
+
+        ;; Create certificate verifier
+        verifier (create-certificate-verifier
+                  (:trusted cert-sources)
+                  (:adjunct cert-sources)
+                  crl-source
+                  ocsp-source)
+
+        ;; Create PAdES service with TSA
+        service (doto (PAdESService. verifier)
+                  (.setTspSource (OnlineTSPSource. tsa-url)))
+
+        ;; Create signature parameters for direct LTA signing
+        parameters (create-signature-parameters-lta private-key-entry)
+
+        ;; Sign document directly with LTA level (single timestamp)
+        data-to-sign (.getDataToSign service document-to-sign parameters)
+        signature-value (.sign token data-to-sign (.getDigestAlgorithm parameters) private-key-entry)
+        signed-document (.signDocument service document-to-sign parameters signature-value)
+
+        ;; Convert to byte array
+        output-stream (ByteArrayOutputStream.)]
+
+    (try
+      (.writeTo signed-document output-stream)
+      (.toByteArray output-stream)
+      (finally
+        (.close output-stream)))))
+
+(defn extend-pdf-with-pem
+  "Extends a signed PDF to PAdES-BASELINE-LTA using PEM certificate and key.
+
+   Options map contains:
+   - :pdf-bytes - Signed PDF content as byte array (required)
+   - :certificate-pem - PEM-formatted certificate (optional, for validation)
+   - :private-key-pem - PEM-formatted private key (optional)
+   - :tsa-url - Timestamp authority URL (default: http://timestamp.digicert.com)"
+  [& {:keys [pdf-bytes certificate-pem private-key-pem tsa-url]
+      :or {tsa-url "http://timestamp.digicert.com"}}]
+
+  (when-not pdf-bytes
+    (throw (IllegalArgumentException. "pdf-bytes is required")))
+
+  ;; Load the signed document
+  (let [signed-document (InMemoryDocument. pdf-bytes)
+
+        ;; Create certificate verifier
+        verifier (if (and certificate-pem private-key-pem)
+                   (let [token (create-token-from-pem certificate-pem private-key-pem)
+                         private-key-entry (first (.getKeys token))
+                         cert-chain (.getCertificateChain private-key-entry)
+                         crl-source (create-crl-source)
+                         ocsp-source (create-ocsp-source)
+                         cert-sources (setup-certificate-sources cert-chain)]
+                     (create-certificate-verifier
+                      (:trusted cert-sources)
+                      (:adjunct cert-sources)
+                      crl-source
+                      ocsp-source))
+                   ;; Minimal verifier without certificate validation
+                   (let [crl-source (create-crl-source)
+                         ocsp-source (create-ocsp-source)
+                         verifier (CommonCertificateVerifier.)]
+                     (.setCrlSource verifier crl-source)
+                     (.setOcspSource verifier ocsp-source)
+                     verifier))
+
+        ;; Create PAdES service with TSA
+        service (doto (PAdESService. verifier)
+                  (.setTspSource (OnlineTSPSource. tsa-url)))
+
+        ;; Create LTA parameters that extend directly without intermediate LT level
+        lta-params (doto (PAdESSignatureParameters.)
+                     (.setSignatureLevel SignatureLevel/PAdES_BASELINE_LTA)
+                     (.setContentSize 65536)) ; 64KB for LTA with archive timestamp
+
+        ;; Extend directly to LTA level
         lta-document (.extendDocument service signed-document lta-params)
 
         ;; Convert to byte array

@@ -16,7 +16,11 @@
      ["/api/sign"
       {:post handler/sign-pdf-handler}]
      ["/api/extend"
-      {:post handler/extend-pdf-handler}]])
+      {:post handler/extend-pdf-handler}]
+     ["/api/sign-with-cert"
+      {:post handler/sign-pdf-with-cert-handler}]
+     ["/api/extend-with-cert"
+      {:post handler/extend-pdf-with-cert-handler}]])
    (ring/create-default-handler)))
 
 (defonce server (atom nil))
@@ -28,8 +32,10 @@
     (println "  TSA URL:" (:tsa-url config))
     (println "Endpoints:")
     (println "  GET  /health")
-    (println "  POST /api/sign - Sign PDF with PAdES-BASELINE-LTA")
-    (println "  POST /api/extend - Extend signed PDF to PAdES-BASELINE-LTA")
+    (println "  POST /api/sign - Sign PDF with PAdES-BASELINE-LTA (uses P12 from config)")
+    (println "  POST /api/extend - Extend signed PDF to PAdES-BASELINE-LTA (uses P12 from config)")
+    (println "  POST /api/sign-with-cert - Sign PDF with PAdES-BASELINE-LTA (multipart: pdf, certificate_pem, private_key_pem, tsa_url)")
+    (println "  POST /api/extend-with-cert - Extend signed PDF to PAdES-BASELINE-LTA (multipart: pdf, certificate_pem, private_key_pem, tsa_url)")
     (reset! server (http/run-server app {:port 4000 :thread 8 :queue-size 2048}))
     (.addShutdownHook (Runtime/getRuntime)
                       (Thread. #(when-let [s @server] (s :timeout 2000))))

@@ -5,11 +5,17 @@
   (:import (java.io ByteArrayOutputStream)))
 
 (defn get-config
-  "Get configuration from environment variables with defaults."
+  "Get configuration from environment variables.
+   Throws exception if required environment variables are not set."
   []
-  {:p12-path (or (System/getenv "P12_PATH") "cotelmur.p12")
-   :p12-password (or (System/getenv "P12_PASSWORD") "REMOVED")
-   :tsa-url (or (System/getenv "TSA_URL") "http://timestamp.digicert.com")})
+  (let [p12-path (System/getenv "P12_PATH")
+        p12-password (System/getenv "P12_PASSWORD")
+        tsa-url (or (System/getenv "TSA_URL") "http://timestamp.digicert.com")]
+    (when-not p12-password
+      (throw (IllegalStateException. "P12_PASSWORD environment variable must be set")))
+    {:p12-path (or p12-path "cotelmur.p12")
+     :p12-password p12-password
+     :tsa-url tsa-url}))
 
 (defn read-body-bytes
   "Reads the entire request body into a byte array."

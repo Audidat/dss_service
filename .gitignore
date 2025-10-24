@@ -9,6 +9,11 @@ target/
 *.pfx
 *.jks
 
+# Environment variables (DO NOT COMMIT)
+.env
+.env.local
+.env.*.local
+
 # Test files
 *.pdf
 *.sh

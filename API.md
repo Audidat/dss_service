@@ -212,6 +212,128 @@ The service creates **PAdES-BASELINE-LTA** signatures with the following charact
 
 **Note:** This endpoint extends the existing signature to LTA. The total number of timestamps in the final PDF may vary depending on what was already in the input signature.
 
+---
+
+### Sign PDF with Certificate (Database-Driven)
+
+**Endpoint:** `POST /api/sign-with-cert`
+
+Sign a PDF document using certificate data from multipart form (for multi-tenant/database-driven scenarios).
+
+**Request:**
+- **Method:** POST
+- **Content-Type:** `multipart/form-data`
+- **Body Parameters:**
+  - `pdf` - PDF file (binary)
+  - `certificate_pem` - PEM-encoded X.509 certificate (text)
+  - `private_key_pem` - PEM-encoded PKCS#8 private key (text, unencrypted)
+  - `tsa_url` - Timestamp Authority URL (text)
+
+**Response:**
+- **Content-Type:** `application/pdf`
+- **Content-Disposition:** `attachment; filename="signed.pdf"`
+- **Body:** Signed PDF binary data
+
+#### Example with curl
+
+```bash
+curl -X POST http://localhost:4000/api/sign-with-cert \
+  -F "pdf=@input.pdf" \
+  -F "certificate_pem=-----BEGIN CERTIFICATE-----
+MIIDXTCCAkWgAwIBAgIJAKZ...
+-----END CERTIFICATE-----" \
+  -F "private_key_pem=-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0B...
+-----END PRIVATE KEY-----" \
+  -F "tsa_url=http://timestamp.digicert.com" \
+  -o signed.pdf
+```
+
+#### Example with Ruby
+
+```ruby
+require 'net/http'
+require 'uri'
+
+def sign_pdf_with_cert(pdf_data, cert_pem, key_pem, tsa_url)
+  uri = URI('http://localhost:4000/api/sign-with-cert')
+
+  boundary = "----RubyMultipartBoundary#{SecureRandom.hex(16)}"
+
+  body_parts = []
+  body_parts << "--#{boundary}\r\n"
+  body_parts << "Content-Disposition: form-data; name=\"pdf\"; filename=\"document.pdf\"\r\n"
+  body_parts << "Content-Type: application/pdf\r\n\r\n"
+  body_parts << pdf_data
+  body_parts << "\r\n"
+
+  body_parts << "--#{boundary}\r\n"
+  body_parts << "Content-Disposition: form-data; name=\"certificate_pem\"\r\n\r\n"
+  body_parts << cert_pem
+  body_parts << "\r\n"
+
+  body_parts << "--#{boundary}\r\n"
+  body_parts << "Content-Disposition: form-data; name=\"private_key_pem\"\r\n\r\n"
+  body_parts << key_pem
+  body_parts << "\r\n"
+
+  body_parts << "--#{boundary}\r\n"
+  body_parts << "Content-Disposition: form-data; name=\"tsa_url\"\r\n\r\n"
+  body_parts << tsa_url
+  body_parts << "\r\n"
+
+  body_parts << "--#{boundary}--\r\n"
+
+  http = Net::HTTP.new(uri.host, uri.port)
+  request = Net::HTTP::Post.new(uri.path)
+  request['Content-Type'] = "multipart/form-data; boundary=#{boundary}"
+  request.body = body_parts.join
+
+  response = http.request(request)
+  response.code == '200' ? response.body : nil
+end
+```
+
+---
+
+### Extend PDF with Certificate (Database-Driven)
+
+**Endpoint:** `POST /api/extend-with-cert`
+
+Extend a signed PDF to LTA using certificate data from multipart form (for multi-tenant/database-driven scenarios).
+
+**Request:**
+- **Method:** POST
+- **Content-Type:** `multipart/form-data`
+- **Body Parameters:**
+  - `pdf` - Signed PDF file (binary)
+  - `certificate_pem` - PEM-encoded X.509 certificate (text)
+  - `private_key_pem` - PEM-encoded PKCS#8 private key (text, unencrypted)
+  - `tsa_url` - Timestamp Authority URL (text)
+
+**Response:**
+- **Content-Type:** `application/pdf`
+- **Content-Disposition:** `attachment; filename="extended_lta.pdf"`
+- **Body:** Extended PDF binary data
+
+#### Example with curl
+
+```bash
+curl -X POST http://localhost:4000/api/extend-with-cert \
+  -F "pdf=@signed.pdf" \
+  -F "certificate_pem=@certificate.pem" \
+  -F "private_key_pem=@private_key.pem" \
+  -F "tsa_url=http://timestamp.digicert.com" \
+  -o extended.pdf
+```
+
+**Key Differences from File-Based Endpoints:**
+- Certificate and private key passed as PEM text (not file paths)
+- Password decryption handled by caller (DocuSeal)
+- Enables multi-tenant scenarios (each request can use different certificate)
+- Private key must be in PKCS#8 format (unencrypted)
+- All processing done in-memory (no temporary files)
+
 ## Integration with DocuSeal
 
 To integrate with DocuSeal, you can call this service from a background job:

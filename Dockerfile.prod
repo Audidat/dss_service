@@ -14,9 +14,6 @@ RUN clj -P
 # Copy source code
 COPY src /app/src
 
-# Precompile namespaces for faster startup
-RUN clj -M -e "(compile 'com.audidat.dss-service.core)"
-
 # Final stage - minimal runtime image
 FROM clojure:temurin-21-tools-deps-alpine
 
@@ -27,7 +24,7 @@ RUN apk add --no-cache curl && \
 
 WORKDIR /app
 
-# Copy dependencies and compiled code from builder
+# Copy dependencies from builder
 COPY --from=builder /root/.m2 /home/dss/.m2
 COPY --from=builder /app /app
 
